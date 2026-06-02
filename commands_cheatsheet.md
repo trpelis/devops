@@ -603,6 +603,187 @@ git reset --hard
 git clean -fd
 ```
 
+Najvažnije Dockerfile stvari za ovaj zadatak:
+
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY target/app.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
+Za Maven build često multi-stage:
+
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /src
+COPY pom.xml .
+COPY src ./src
+RUN mvn clean package -DskipTests
+
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY --from=build /src/target/*.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
+Što gledati u Dockerfileu:
+
+Je li base image dobar za Java verziju?
+Je li JAR stvarno kopiran na očekivanu lokaciju?
+Je li ENTRYPOINT/CMD ispravan?
+Je li WORKDIR smislen?
+Je li port aplikacije usklađen s Compose/nginx configom?
+Radi li app kao root ili non-root user?
+Postoji li healthcheck?
+Ima li nepotrebno velik image?
+Jesu li build i runtime odvojeni?
+Debug komande za Dockerfile/image:
+
+docker build -t app-test .
+docker run --rm -it app-test
+docker run --rm -it app-test sh
+docker image ls
+docker history app-test
+docker inspect app-test
+Ako container odmah exit-a:
+
+docker ps -a
+docker logs <container>
+docker inspect <container>
+Tipični Dockerfile problemi:
+
+COPY target/*.jar app.jar ne radi jer JAR nije buildan
+kriva Java verzija, npr. app treba Java 17, image ima Java 11
+ENTRYPOINT pokazuje na krivi filename
+app sluša na 8080, a nginx/compose očekuje 9000
+Dockerfile koristi build artifact koji ne postoji
+image nema curl/nc pa je teže debugirati connectivity
+permissions problem zbog non-root usera
+Dakle: Compose sam naglašavao jer je najvjerojatnije “glavno bojno polje” za integraciju app-nginx-postgres, ali Dockerfile je drugi važan sloj. Dobar redoslijed je:
+
+Dockerfile: može li se image ispravno izgraditi i pokrenuti?
+Compose: mogu li servisi razgovarati međusobno?
+Nginx: može li klijent doći do aplikacije?
+Postgres: može li aplikacija do baze?
+
+
+
+U pom.xml gledaj prvenstveno stvari koje utječu na build, Java verziju, packaging, dependencyje i runtime ponašanje.
+
+Najvažnije:
+
+<packaging>jar</packaging>
+ili:
+
+<packaging>war</packaging>
+Ako je war, Dockerfile/Java pokretanje može biti drugačije. Ako je Spring Boot jar, najčešće očekuješ:
+
+java -jar target/something.jar
+Java verzija:
+
+<properties>
+    <java.version>17</java.version>
+</properties>
+ili:
+
+<maven.compiler.source>17</maven.compiler.source>
+<maven.compiler.target>17</maven.compiler.target>
+Ovo mora odgovarati Docker imageu. Ako pom.xml traži Java 17, a Dockerfile koristi Java 11, build ili runtime može pasti.
+
+Spring Boot plugin:
+
+<plugin>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-maven-plugin</artifactId>
+</plugin>
+Bitno jer radi executable/fat JAR. Bez njega možeš dobiti JAR koji nema sve dependencyje ili nema dobar manifest.
+
+Build final name:
+
+<build>
+    <finalName>app</finalName>
+</build>
+Ako postoji, output može biti:
+
+target/app.jar
+Ako ne postoji, može biti nešto tipa:
+
+target/my-service-1.0.0-SNAPSHOT.jar
+To mora odgovarati Dockerfileu:
+
+COPY target/app.jar app.jar
+Dependencies za Postgres:
+
+<dependency>
+    <groupId>org.postgresql</groupId>
+    <artifactId>postgresql</artifactId>
+</dependency>
+Ako app treba Postgres, a drivera nema, očekuj runtime error.
+
+Spring Data/JPA:
+
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-jpa</artifactId>
+</dependency>
+ili JDBC:
+
+<artifactId>spring-boot-starter-jdbc</artifactId>
+Migration tools:
+
+<artifactId>flyway-core</artifactId>
+ili:
+
+<artifactId>liquibase-core</artifactId>
+Ako postoje, DB se možda inicijalizira migracijama. Onda kod problema s bazom gledaj migration logove.
+
+Actuator:
+
+<artifactId>spring-boot-starter-actuator</artifactId>
+Ako postoji, probaj:
+
+curl http://localhost:8080/actuator/health
+Profiles / resource filtering:
+
+<profiles>
+i:
+
+<resources>
+Ovo može značiti da build ovisi o Maven profilu:
+
+mvn clean package -Pprod
+ili:
+
+mvn clean package -DskipTests
+Testovi:
+
+<plugin>
+    <artifactId>maven-surefire-plugin</artifactId>
+</plugin>
+
+mvn test
+mvn clean package
+mvn clean package -DskipTests
+Korisne komande:
+
+mvn -version
+mvn dependency:tree
+mvn clean test
+mvn clean package
+mvn clean package -DskipTests
+ls -lah target/
+Praktični checklist:
+
+[ ] Koja Java verzija?
+[ ] Je li packaging jar ili war?
+[ ] Koji JAR nastaje u target/?
+[ ] Poklapa li se JAR ime s Dockerfile COPY naredbom?
+[ ] Postoji li spring-boot-maven-plugin?
+[ ] Postoji li Postgres driver?
+[ ] Postoji li actuator health endpoint?
+[ ] Postoje li Flyway/Liquibase migracije?
+[ ] Treba li Maven profil za build?
+[ ] Pada li build zbog testova, dependencyja ili Java verzije?
+
+
+
 ## 12. Tipicni Scenariji i Rjesenja
 
 ### App ne moze do Postgresa
@@ -821,38 +1002,4 @@ Poboljsanje:
 Dodao bih healthcheck za aplikaciju i bolju dokumentaciju lokalnog pokretanja.
 ```
 
-## 16. Mini Checklist Za Dan U Uredu
 
-```text
-[ ] Procitaj README
-[ ] Pronadi compose/Docker/nginx/app config
-[ ] docker compose config
-[ ] docker compose ps
-[ ] docker compose logs
-[ ] Identificiraj servis koji pada
-[ ] Provjeri env varijable
-[ ] Provjeri network/service nameove
-[ ] Testiraj DB connectivity
-[ ] Testiraj app direktno
-[ ] Testiraj nginx prema app-u
-[ ] Napravi minimalni fix
-[ ] Restart/rebuild sto je potrebno
-[ ] Validiraj curlom i logovima
-[ ] Zapiši uzrok, rjesenje i poboljsanja
-```
-
-## 17. Najvaznije Pravilo
-
-Ako zapnes, vrati se na pitanje:
-
-```text
-Tko s kim treba razgovarati, preko kojeg hosta, porta i protokola?
-```
-
-Za ovaj zadatak to je obicno:
-
-```text
-nginx -> app -> postgres
-HTTP -> JDBC/TCP
-app:8080 -> postgres:5432
-```

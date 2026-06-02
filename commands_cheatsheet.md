@@ -1,10 +1,7 @@
-# Amphinicy Systems Engineer Cheatsheet
+Cheatsheet
 
-Prakticni podsjetnik za zadatak: dockerizirana Java aplikacija, nginx, Postgres, pripadajuci servisi i analiza postojeceg stanja.
 
 ## 1. Mentalni Model Zadatka
-
-Najvjerojatnija arhitektura:
 
 ```text
 browser/client
